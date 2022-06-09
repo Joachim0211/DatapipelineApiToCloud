@@ -39,3 +39,5 @@ git switch -c nameOfTheNewBrach
 #in you command line you should see the new branch indicated
 
 git push --set-upstream origin nameOfTheNewBranch # this pushes it to a new branch on githup  
+# you have set up the branch on git hup
+
