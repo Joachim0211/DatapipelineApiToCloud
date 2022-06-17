@@ -1,0 +1,187 @@
+
+import requests
+import pandas as pd
+import json
+from bs4 import BeautifulSoup
+import re
+import time
+import os
+import pytz
+from datetime import datetime
+#import mysql.connector
+from sqlalchemy import *
+
+
+#API_key = os.getenv("API_K_C")
+ #gets the API key from .env
+#define the list of cities
+
+citd =['Baden-Baden', "Berlin",  "Bonn", 'Bremen', 'Dresden', 'Dortmund', 'Düsseldorf', 'Essen', 'Frankfurt am Main', 'Hamburg', 'Hannover', 'Leipzig', "Munich", 'Münster',  'Nuremberg',  'Stuttgart']
+
+#strategy is to first get the wikidataid and than collect the data from geoDB; openweather has no population data or at least I coul´nt see them 
+
+
+API_key = '3cd15bf266msh2331a2a034ea490p1c96a2jsn828e9dce3a50' #os.getenv("API_K_C")
+print(API_key)
+def demo(cities):
+    cities_id = [] # initiate an empty id list
+    dfList = []
+    for city in cities:
+        #retrieve the wikidataId
+        time.sleep(1)
+        url1 = 'https://en.wikipedia.org/wiki/{}'.format(city) #go to the wiki site of the city
+        citem = requests.get(url1, 'html.parser') # get the html
+        if BeautifulSoup(citem.content) != None:
+            soup = BeautifulSoup(citem.content)# soup the content
+        if soup.find('li', {'id':'t-wikibase'}).find('a')['href'] != None:
+            wikidata_link = soup.find('li', {'id':'t-wikibase'}).find('a')['href'] #find the link that contains the wikidataid e.g. London https://www.wikidata.org/wiki/Q84
+        #wl.append(wikidata_link)
+        # \d+ is a regular expression and means one digit or more, the wiki data id consist of a Q followed by severaldigits
+        #for group() in re see: https://www.tutorialspoint.com/What-is-the-groups-method-in-regular-expressions-in-Python
+        city_id = re.search('Q\d+', wikidata_link).group()
+        cities_id.append(city_id)
+        #use the wikidataId to retrieve infrormation from geoDB
+        url2 = "https://wft-geo-db.p.rapidapi.com/v1/geo/cities/{}".format(city_id)
+        headers = {
+        "X-RapidAPI-Key": API_key,
+        "X-RapidAPI-Host": "wft-geo-db.p.rapidapi.com"
+        }    
+        response = requests.request("GET", url2, headers=headers)# gets a json-like string fromg geoDB containing the necessary informations
+        #print(response.json())
+        cit_dic = {}#make a dictionary to retrieve the information
+        cit_dic['City'] = response.json()['data']['name']
+        cit_dic['Country'] = response.json()['data']['country']
+        cit_dic['CountryCode'] = response.json()['data']['countryCode']
+        cit_dic['WikiDataId'] = response.json()['data']['wikiDataId']
+        cit_dic['Latitude'] = round(response.json()['data']['latitude'], 4)
+        cit_dic['Longitude'] = round(response.json()['data']['longitude'], 4)
+        cit_dic['Population'] = response.json()['data']['population']
+        cit_dic['Timezone'] = response.json()['data']['timezone']
+        
+        dfList.append(cit_dic) #put it in a list
+    df_demo = pd.DataFrame(dfList) # transform the list to df
+        
+    schema="scooter"
+    host='wbs-project3.cmvuckxdieow.us-east-1.rds.amazonaws.com'
+    user="admin"
+    password="Majupau7##1.0"
+    port=3306
+    #con = f'mysql+pymysql://{user}:{password}@{host}:{port}/{schema}'
+    df_demo.to_sql('city',
+    #mysql+pymysql://{password}@wbs-project3.cmvuckxdieow.us-east-1.rds.amazonaws.com/scooter
+    f'mysql+pymysql://{user}:{password}@{host}:{port}/{schema}',
+    if_exists='append',
+    index=False)
+    
+  
+  
+  # wheather data to retrieve every morning 
+  
+citd =['Baden-Baden', "Berlin",  "Bonn", 'Bremen', 'Dresden', 'Dortmund', 'Düsseldorf', 'Essen', 'Frankfurt am Main', 'Hamburg', 'Hannover', 'Leipzig', "Munich", 'Münster',  'Nuremberg',  'Stuttgart']#alternatively only German cities
+
+def weather(cities):
+    API_key = 'd0040c9b033d6a3a4772784afd988afa'  #os.getenv("API_K_W") #gets key from the env file
+
+    tz = pytz.timezone('Europe/Berlin')# timezone needs to be imported and translated for the european cities (Europe_Berlin to Europe/Berlin), see cell below
+    now = datetime.now().astimezone(tz)#for the timestamp time of sampling
+
+    a = {'City': [], 'Country': [], 'ForecastTime': [], 'Outlook': [], 'Temperature': [], 'Clouds': [], 'Rain': [], 'Snow': [], 'WindSpeed': [], 'DateInformation': []} #usefull form of a dic, gives the right form when change to df, see cell below 
+
+    for city in cities: #runs a loop over the cities
+        url = (f"http://api.openweathermap.org/data/2.5/forecast?q={city}&appid={API_key}&units=metric")
+        response = requests.get(url)
+        json = response.json() # the first 'priciple' key for this json is 'list', which is not good practice in my op but must be used to loop over it
+    #print(json['city']['name'])
+    # print(type(json))
+
+        for i in json['list']:# informations will be added to the dic a according to the json structure (see weimar cell above), if-else for rain does not work (is there or not but python cannot know that it could be there), therefore try except - appears to work but I´m not sure if clean
+          #print(i)  
+            a['City'].append(json['city']['name'])
+            a['Country'].append(json['city']['country'])
+            a['ForecastTime'].append(i['dt_txt'])
+            a['Outlook'].append(i['weather'][0]['description'])
+            a['Temperature'].append(i['main']['temp'])
+            a['Clouds'].append(i['clouds']['all'])
+            try:
+                a['Rain'].append(i['rain']['3h'])
+            except:
+                a['Rain'].append('0')
+            try:
+                a['Snow'].append(i['snow']['3h'])
+            except:
+                a['Snow'].append('0')
+            a['WindSpeed'].append(i['wind']['speed'])
+            a['DateInformation'].append(now.strftime("%d/%m/%Y %H:%M:%S"))
+    b=pd.DataFrame(a) #turns a to datafram , see cell below
+    
+    schema="scooter"
+    host='wbs-project3.cmvuckxdieow.us-east-1.rds.amazonaws.com'
+    user="admin"
+    password="Majupau7##1.0"
+    port=3306
+    #con = f'mysql+pymysql://{user}:{password}@{host}:{port}/{schema}'
+    b.to_sql('weather',
+    #mysql+pymysql://{password}@wbs-project3.cmvuckxdieow.us-east-1.rds.amazonaws.com/scooter
+    f'mysql+pymysql://{user}:{password}@{host}:{port}/{schema}',
+    if_exists='append',
+    index=False)
+    #b.to_csv('./csvTables/Weather.csv') #writes the df to csv to the folder csv tables and replaces the table of the same name that might be already there
+    #return b
+    
+#weather(citd)
+
+# get the flight data
+
+API_KE = 'd67656b1a1mshbd01e446e3b088dp1b216ejsn1abb69340012' #os.getenv("API_C_F")
+#print(API_KE)
+cit = ['EDSB', 'EDDT', 'EDDB', 'EDDK', 'EDDW', 'EDDC', 'EDLW', 'EDDL', 'EDDF', 'EDDH', 'EDDV', 'EDDP', 'EDDM', 'EDDG', 'EDDN', 'EDDS']
+def flights(cities):
+    
+    a = {'City': [], 'FlightNumber': [], 'FlightStatus': [], 'OriginAirport': [], 'ScheduledTime': [], 'AirLine': []}#, 'Outlook': [], 'Temperature': [], 'Clouds': [], 'Rain': [], 'Snow': [], 'WindSpeed': [], 'DateInformation': []}
+    for city in cities:
+        url = f"https://aerodatabox.p.rapidapi.com/flights/airports/icao/{city}/2022-06-15T06:00/2022-06-15T17:00"
+        querystring = {"direction":"Arrival","withCodeshared":"true","withCargo":"false","withPrivate":"false","withLocation":"true"}
+        headers = {
+           "X-RapidAPI-Host": "aerodatabox.p.rapidapi.com",
+           "X-RapidAPI-Key": API_KE
+           }
+        responses = requests.request("GET", url, headers=headers, params=querystring)
+        json = responses.json()
+        
+        for i in json['arrivals']:
+            a['City'] = city
+            a['FlightNumber'].append(i['number'])
+            a['FlightStatus'].append(i['status'])
+            a['OriginAirport'].append(i['movement']['airport']['name'])
+            a['ScheduledTime'].append(i['movement']['scheduledTimeLocal'])
+            a['AirLine'].append(i['airline']['name'])
+        
+    c = pd.DataFrame(a)
+    #c.to_csv('./csvTables/Flights.csv') #writes the df to csv to the folder csv tables and replaces the table of the same name that might be already there
+    #return c
+#flights(cit)
+
+    schema="scooter"
+    host='wbs-project3.cmvuckxdieow.us-east-1.rds.amazonaws.com'
+    user="admin"
+    password="Majupau7##1.0"
+    port=3306
+    #con = f'mysql+pymysql://{user}:{password}@{host}:{port}/{schema}'
+    c.to_sql('flight',
+    #mysql+pymysql://{password}@wbs-project3.cmvuckxdieow.us-east-1.rds.amazonaws.com/scooter
+    f'mysql+pymysql://{user}:{password}@{host}:{port}/{schema}',
+    if_exists='append',
+    index=True)
+  
+
+
+def lambda_handler(event, context):
+    # TODO implement
+    # demo(citd)
+    weather(citd)
+    flights(cit)
+    return {
+        'statusCode': 200,
+        'body': json.dumps('Hello from Mars - always yours, Alf!')
+    }
+
